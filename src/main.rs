@@ -59,7 +59,7 @@ async fn main() {
 }
 
 // Function to send message to WebSocket client
-async fn send_message(ws_stream: &mut WebSocketStream<tokio::net::TcpStream>) {
+async fn send_message(ws_stream: &mut WebSocketStream<tokio::net::TcpStream>) -> Result<(), tokio_tungstenite::tungstenite::Error> {
     let mut kline_data = KlineData {
         e: "kline".to_string(),
         E: 1742037122019,
@@ -93,8 +93,12 @@ async fn send_message(ws_stream: &mut WebSocketStream<tokio::net::TcpStream>) {
     let message = serde_json::to_string(&kline_data).expect("Failed to serialize message");
 
     // Send the message as a WebSocket message
-    if ws_stream.send(Message::Text(message.into())).await.is_err() {
-        println!("Error sending message to client.");
+    match ws_stream.send(Message::Text(message.into())).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            println!("Failed to send message: {}", e);
+            Err(e) // Return the error for further handling
+        }
     }
 }
 
@@ -104,64 +108,48 @@ fn generate_random_number() -> u64 {
 }
 
 async fn handle_client(mut ws_stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) {
-    // let mut candle_stick_data = CandleStick {
-    //     ts: 0,
-    //     o: 0.0,
-    //     h: 0.0,
-    //     l: 0.0,
-    //     c: 0.0,
-    //     v: 0.0,
-    // };
-
     // Create a timer to periodically send candle data
     let mut interval = time::interval(Duration::from_secs(1)); // Send data every 60 seconds
 
     loop {
-        // Send message every interval
-        interval.tick().await;
+        tokio::select! {
+            _ = interval.tick() => {
+                // Send message every interval
+                if let Err(e) = send_message(&mut ws_stream).await {
+                    println!("Client closed the connection.");
+                    break;
+                }
+            }
 
-        send_message(&mut ws_stream).await;
-        send_message(&mut ws_stream).await;
-        send_message(&mut ws_stream).await;
-        send_message(&mut ws_stream).await;
-
-        // Prepare a sample candlestick message (Binance-style)
-        // let kline = Kline {
-        //     open_time: candle_stick_data.ts,
-        //     close: candle_stick_data.c.to_string(),
-        //     open: candle_stick_data.o.to_string(),
-        //     high: candle_stick_data.h.to_string(),
-        //     low: candle_stick_data.l.to_string(),
-        //     volume: candle_stick_data.v.to_string(),
-        // };
-
-        // let ws_message = WebSocketMessage { kline };
-
-        // // Send the message to the client
-        // let message = serde_json::to_string(&ws_message).unwrap();
-
-        // // Send the message as Text
-        // if  ws_stream.send(Message::Text(message.into())).await.is_err() {
-        //     println!("Error sending message to client.");
-        //     break; // If sending fails, break the loop (or handle as necessary)
-        // }
-
-        
-
-        // // Update the candle data (this could be done with real data in practice)
-        // candle_stick_data.ts += 60; // Increment timestamp for simplicity
-        // candle_stick_data.o = 35000.0; // Example open price
-        // candle_stick_data.h = 35500.0; // Example high price
-        // candle_stick_data.l = 34000.0; // Example low price
-        // candle_stick_data.c = 34500.0; // Example close price
-        // candle_stick_data.v = 1000.0;  // Example volume
+            // Check if a message is received
+            Some(Ok(message)) = ws_stream.next() => {
+                match message {
+                    Message::Close(_) => {
+                        // Gracefully handle client closing the connection
+                        println!("Client closed the connection.");
+                        break;  // Break the loop to stop sending messages
+                    }
+                    Message::Ping(_) | Message::Pong(_) => {
+                        // Handle Ping and Pong messages if necessary
+                    }
+                    _ => {
+                        // Handle other message types if needed
+                    }
+                }
+            }
+            //  // If the connection is dropped, break the loop
+            //  None => {
+            //     println!("Client connection lost.");
+            //     break;  // Break the loop to stop sending messages
+            // }
+        }
     }
 
-    // Gracefully close the connection after finishing
-    let close_frame = CloseFrame {
-        code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
-        reason: "Close".into(), // Empty reason
-    };
-    ws_stream.close(Some(close_frame)).await.unwrap();
-    println!("Connection closed.");
+    // // Gracefully close the connection after finishing
+    // let close_frame = CloseFrame {
+    //     code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
+    //     reason: "Close".into(), // Empty reason
+    // };
+    // ws_stream.close(Some(close_frame)).await.unwrap();
+    // println!("Connection closed.");
 }
